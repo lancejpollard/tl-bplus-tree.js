@@ -1,17 +1,9 @@
-class KeyValue {
-  constructor(key, value) {
-      this.key = key;
-      this.value = value;
-  }
-}
-
 class Node {
   constructor(capacity) {
       // Mimic fixed-size array (avoid accidentally growing it)
       this.children = Object.seal(Array(capacity).fill(null));
       this.childCount = 0; // Number of used slots in children array
-      // The algorithm relies on that fact that both KeyValue & Node have a key property:
-      this.key = null; // Here it is a property for supporting a search
+      this.treeSize = 0; // Total number of values in this subtree
       // Maintain back-link to parent.
       this.parent = null;
       // Per level in the tree, maintain a doubly linked list
@@ -30,12 +22,22 @@ class Node {
   index() {
       return this.parent.children.indexOf(this);
   }
-  updateKey() {
+  updateTreeSize(start, end, sign=1) {
+      let sum = 0;
+      if (this.isLeaf()) {
+          sum = end - start;
+      } else {
+          for (let i = start; i < end; i++) sum += this.children[i].treeSize;
+      }
+      if (!sum) return;
+      sum *= sign;
+      // Apply the sum change to this node and all its ancestors
       for (let node = this; node; node = node.parent) {
-          node.key = node.children[0].key;
+          node.treeSize += sum;
       }
   }
   wipe(start, end) {
+      this.updateTreeSize(start, end, -1);
       this.children.copyWithin(start, end, this.childCount);
       for (let i = this.childCount - end + start; i < this.childCount; i++) {
           this.children[i] = null;
@@ -43,8 +45,6 @@ class Node {
       this.childCount -= end - start;
       // Reduce allocated size if possible
       if (this.childCount * 2 <= this.children.length) this.setCapacity(this.children.length / 2);
-      // Update key if first item changed
-      if (start === 0 && this.childCount > 0) this.updateKey();
   }
   moveFrom(neighbor, target, start, count=1) {
       // Note: `start` can have two meanings:
@@ -64,14 +64,13 @@ class Node {
       } else {
           this.children[target] = start; // start is value to insert
       }
+      this.updateTreeSize(target, target + count, 1);
       // Set parent link(s)
       if (!this.isLeaf()) {
           for (let i = 0; i < count; i++) {
               this.children[target + i].parent = this;
           }
       }
-      // Update key if first item changed
-      if (target === 0) this.updateKey();
   }
   moveToNext(count) {
       this.next.moveFrom(this, 0, this.childCount - count, count);
@@ -117,48 +116,90 @@ class Tree {
   constructor(nodeCapacity=32) {
       this.nodeCapacity = nodeCapacity;
       this.root = new Node(1);
-      this.first = this.root; // Head of doubly linked list at bottom level
+      this.first = this.last = this.root; // Head of doubly linked list at bottom level
   }
-  locate(key) {
+  locate(offset) {
       let node = this.root;
-      let low;
-      while (true) {
-          // Binary search among keys
-          low = 1;
-          let high = node.childCount;
-          while (low < high) {
-              let index = (low + high) >> 1;
-              if (key >= node.children[index].key) {
-                  low = index + 1;
-              } else {
-                  high = index;
-              }
+      // Normalise argument
+      offset = offset < 0 ? Math.max(0, node.treeSize + offset) : Math.min(offset, node.treeSize);
+      // Shortcuts
+
+      if (offset < this.first.childCount) return [this.first, offset]; // *
+      if (offset >= node.treeSize - this.last.childCount) {
+          return [this.last, offset - node.treeSize + this.last.childCount]; // *
+      }
+      while (!node.isLeaf()) {
+          let index = 0;
+          let child = node.children[index];
+          while (offset > child.treeSize || offset === child.treeSize && child.next) {
+              offset -= child.treeSize;
+              child = node.children[++index];
           }
-          low--;
-          if (node.isLeaf()) break;
-          node = node.children[low];
+          node = child;
       }
-      if (low < node.childCount && key > node.children[low].key) return [node, low+1];
-      return [node, low];
+      return [node, offset];
   }
-  get(key) {
-      let [node, index] = this.locate(key);
-      if (index < node.childCount) {
-          let keyValue = node.children[index];
-          if (keyValue.key === key) return keyValue.value;
+  getItemAt(offset) {
+      let [node, index] = this.locate(offset);
+      if (index < node.childCount) return node.children[index];
+  }
+  setItemAt(offset, value) {
+      let [node, index] = this.locate(offset);
+      if (index < node.childCount) node.children[index] = value;
+  }
+  removeItemAt(offset) {
+      let [node, index] = this.locate(offset);
+      if (index >= node.childCount) return;
+      let value = node.children[index]; // * get deleted item (to return it)
+
+      while (true) {
+          console.assert(node.isLeaf() || node.children[index].treeSize === 0);
+          node.basicRemove(index);
+
+          // Exit when node's fill ratio is fine
+          if (!node.parent || node.childCount * 2 > this.nodeCapacity) return value; // *
+          // Node has potentially too few children, we should either merge or redistribute
+
+          let [left, right] = node.pairWithSmallest();
+
+          if (!left || !right) { // A node with no siblings? Must become the root!
+              this.root = node;
+              node.parent = null;
+              return value; // *
+          }
+          let sumCount = left.childCount + right.childCount;
+          let childCount = sumCount >> 1;
+
+          // Check whether to merge or to redistribute
+          if (sumCount > this.nodeCapacity) { // redistribute
+              // Move some data from the bigger to the smaller node
+              let shift = childCount - node.childCount;
+              if (!shift) { // Boundary case: when a redistribution would bring no improvement
+                  console.assert(node.childCount * 2 === this.nodeCapacity && sumCount === this.nodeCapacity + 1);
+                  return value; // *
+              }
+              if (node === left) { // move some children from right to left
+                  left.moveFromNext(shift);
+              } else { // move some children from left to right
+                  left.moveToNext(shift);
+              }
+              return value; // *
+          }
+
+          // Merge:
+          // Move all data from the right to the left
+          left.moveFromNext(right.childCount);
+          if (right === this.last) this.last = left;
+          // Prepare to delete right node
+          node = right.parent;
+          index = right.index();
       }
   }
-  set(key, value) {
-      let [node, index] = this.locate(key);
-      if (index < node.childCount && node.children[index].key === key) {
-          // already present: update the value
-          node.children[index].value = value;
-          return;
-      }
-      let item = new KeyValue(key, value); // item can be a KeyValue or a Node
+  insertItemAt(offset, value) {
+      let [node, index] = this.locate(offset);
       while (node.childCount === this.nodeCapacity) { // No room here
           if (index === 0 && node.prev && node.prev.childCount < this.nodeCapacity) {
-              return node.prev.basicInsert(node.prev.childCount, item);
+              return node.prev.basicInsert(node.prev.childCount, value);
           }
           // Check whether we can redistribute (to avoid a split)
           if (node !== this.root) {
@@ -176,9 +217,9 @@ class Tree {
                   }
                   if (joinedIndex > left.childCount ||
                           joinedIndex === left.childCount && left.childCount > right.childCount) {
-                      right.basicInsert(joinedIndex - left.childCount, item);
+                      right.basicInsert(joinedIndex - left.childCount, value);
                   } else {
-                      left.basicInsert(joinedIndex, item);
+                      left.basicInsert(joinedIndex, value);
                   }
                   return;
               }
@@ -187,13 +228,14 @@ class Tree {
           let childCount = node.childCount >> 1;
           // Create a new node that will later become the right sibling of this node
           let sibling = new Node(childCount);
+          if (node === this.last) this.last = sibling;
           // Move half of node node's data to it
           sibling.moveFrom(node, 0, childCount, childCount);
-          // Insert the item in either the current node or the new one
+          // Insert the value in either the current node or the new one
           if (index > node.childCount) {
-              sibling.basicInsert(index - node.childCount, item);
+              sibling.basicInsert(index - node.childCount, value);
           } else {
-              node.basicInsert(index, item);
+              node.basicInsert(index, value);
           }
           // Is this the root?
           if (!node.parent) {
@@ -204,56 +246,21 @@ class Tree {
           // Prepare for inserting the sibling node into the tree
           index = node.index() + 1;
           node = node.parent;
-          item = sibling;  // item is now a Node
+          value = sibling;
       }
-      node.basicInsert(index, item);
+      node.basicInsert(index, value);
   }
-  remove(key) {
-      let [node, index] = this.locate(key);
-      if (index >= node.childCount || node.children[index].key !== key) return; // not found
-      while (true) {
-          node.basicRemove(index);
-
-          // Exit when node's fill ratio is fine
-          if (!node.parent || node.childCount * 2 > this.nodeCapacity) return;
-          // Node has potentially too few children, we should either merge or redistribute
-
-          let [left, right] = node.pairWithSmallest();
-
-          if (!left || !right) { // A node with no siblings? Must become the root!
-              this.root = node;
-              node.parent = null;
-              return;
-          }
-          let sumCount = left.childCount + right.childCount;
-          let childCount = sumCount >> 1;
-
-          // Check whether to merge or to redistribute
-          if (sumCount > this.nodeCapacity) { // redistribute
-              // Move some data from the bigger to the smaller node
-              let shift = childCount - node.childCount;
-              if (!shift) { // Boundary case: when a redistribution would bring no improvement
-                  console.assert(node.childCount * 2 === this.nodeCapacity && sumCount === this.nodeCapacity + 1);
-                  return;
-              }
-              if (node === left) { // move some children from right to left
-                  left.moveFromNext(shift);
-              } else { // move some children from left to right
-                  left.moveToNext(shift);
-              }
-              return;
-          }
-
-          // Merge:
-          // Move all data from the right to the left
-          left.moveFromNext(right.childCount);
-          // Prepare to delete right node
-          node = right.parent;
-          index = right.index();
-      }
+  // * added 4 methods
+  push(value) {
+      this.insertItemAt(this.root.treeSize, value);
+  }
+  pop() {
+      return this.removeItemAt(-1);
+  }
+  unshift(value) {
+      this.insertItemAt(0, value);
+  }
+  shift() {
+      return this.removeItemAt(0);
   }
 }
-
-module.exports = Tree
-Tree.Node = Node
-Tree.KeyValue = KeyValue
