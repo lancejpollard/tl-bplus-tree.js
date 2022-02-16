@@ -1,4 +1,7 @@
 
+const Tree = require('./s')
+const Node = Tree.Node
+
   /* Below this point: these methods are optional */
 Tree.prototype[Symbol.iterator] = function*() { // Make tree iterable
     let i = 0;
@@ -8,10 +11,10 @@ Tree.prototype[Symbol.iterator] = function*() { // Make tree iterable
 }
 Tree.prototype.verify = function() {
     // Raise an error when the tree violates one of the required properties
-    if (!this.root) return; // An empty tree is fine.
-    if (this.root.parent) throw "root should not have a parent";
+    if (!this.base) return; // An empty tree is fine.
+    if (this.base.parent) throw "base should not have a parent";
     // Perform a breadth first traversal
-    let q = [this.root];
+    let q = [this.base];
     while (q.length) {
         if (q[0].isLeaf() && this.first !== q[0]) throw "this.first is not pointing to first leaf";
         let level = [];
@@ -111,3 +114,24 @@ Tree.prototype.test = function(count=100, option=3) {
 // then a mix of 1000 insertions/removals, the latter with either pop or shift.
 new Tree(8).test(1000);
 console.log("all tests completed");
+
+let tree = new Tree(16)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.push(1)
+tree.unshift(1)
+console.log(tree.base.children)

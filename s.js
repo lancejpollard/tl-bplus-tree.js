@@ -115,11 +115,11 @@ class Node {
 class Tree {
   constructor(nodeCapacity=32) {
       this.nodeCapacity = nodeCapacity;
-      this.root = new Node(1);
-      this.first = this.last = this.root; // Head of doubly linked list at bottom level
+      this.base = new Node(1);
+      this.first = this.last = this.base; // Head of doubly linked list at bottom level
   }
   locate(offset) {
-      let node = this.root;
+      let node = this.base;
       // Normalise argument
       offset = offset < 0 ? Math.max(0, node.treeSize + offset) : Math.min(offset, node.treeSize);
       // Shortcuts
@@ -162,8 +162,8 @@ class Tree {
 
           let [left, right] = node.pairWithSmallest();
 
-          if (!left || !right) { // A node with no siblings? Must become the root!
-              this.root = node;
+          if (!left || !right) { // A node with no siblings? Must become the base!
+              this.base = node;
               node.parent = null;
               return value; // *
           }
@@ -202,7 +202,7 @@ class Tree {
               return node.prev.basicInsert(node.prev.childCount, value);
           }
           // Check whether we can redistribute (to avoid a split)
-          if (node !== this.root) {
+          if (node !== this.base) {
               let [left, right] = node.pairWithSmallest();
               let joinedIndex = left === node ? index : left.childCount + index;
               let sumCount = left.childCount + right.childCount + 1;
@@ -237,11 +237,11 @@ class Tree {
           } else {
               node.basicInsert(index, value);
           }
-          // Is this the root?
+          // Is this the base?
           if (!node.parent) {
-              // ...then first create a parent, which is the new root
-              this.root = new Node(2);
-              this.root.basicInsert(0, node);
+              // ...then first create a parent, which is the new base
+              this.base = new Node(2);
+              this.base.basicInsert(0, node);
           }
           // Prepare for inserting the sibling node into the tree
           index = node.index() + 1;
@@ -252,7 +252,7 @@ class Tree {
   }
   // * added 4 methods
   push(value) {
-      this.insertItemAt(this.root.treeSize, value);
+      this.insertItemAt(this.base.treeSize, value);
   }
   pop() {
       return this.removeItemAt(-1);
@@ -264,3 +264,6 @@ class Tree {
       return this.removeItemAt(0);
   }
 }
+
+module.exports = Tree
+Tree.Node = Node
